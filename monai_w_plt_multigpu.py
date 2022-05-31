@@ -1,3 +1,14 @@
+# Note:
+# to reproduce this example: 
+# I am using torch==1.11.0, pytorch-lightning=1.6.3
+# for MONAI, it was installed with  pip install -q "monai-weekly[nibabel]"
+# Currently, there is bug related to protobuf version: 
+# https://github.com/PyTorchLightning/pytorch-lightning/issues/13159
+# so, I have to do the following:
+# pip install "protobuf<4.21.0"
+
+
+
 import pytorch_lightning
 from monai.utils import set_determinism
 from monai.transforms import (

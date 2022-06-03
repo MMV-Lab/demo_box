@@ -8,7 +8,6 @@
 # pip install "protobuf<4.21.0"
 
 
-
 import pytorch_lightning
 from monai.utils import set_determinism
 from monai.transforms import (
@@ -17,10 +16,8 @@ from monai.transforms import (
     Compose,
     CropForegroundd,
     LoadImaged,
-    Orientationd,
     RandCropByPosNegLabeld,
     ScaleIntensityRanged,
-    Spacingd,
     EnsureTyped,
     EnsureType,
 )
@@ -28,13 +25,47 @@ from monai.networks.nets import UNet
 from monai.networks.layers import Norm
 from monai.metrics import DiceMetric
 from monai.losses import DiceLoss
-from monai.data import SmartCacheDataset, CacheDataset, list_data_collate
+from monai.data import CacheDataset, list_data_collate
+
+from typing import Dict, List, Sequence, Tuple, Union
+import numpy as np
+from monai.data import ImageReader
+from monai.utils import ensure_tuple, require_pkg
+from monai.config import PathLike
+from monai.data.image_reader import _stack_images
+from aicsimageio import AICSImage
+
+from aicsimageio.writers import OmeTiffWriter
 import torch
 import tempfile
-import nibabel as nib
-import numpy as np
 import os
-from ray_lightning import RayShardedPlugin
+
+
+@require_pkg(pkg_name="aicsimageio")
+class bio_reader(ImageReader):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.kwargs = kwargs
+
+    def read(self, data: Union[Sequence[PathLike], PathLike]):
+        filenames: Sequence[PathLike] = ensure_tuple(data)
+        img_ = []
+        for name in filenames:
+            img_.append(AICSImage(f"{name}"))
+
+        return img_ if len(filenames) > 1 else img_[0]
+
+    def get_data(self, img) -> Tuple[np.ndarray, Dict]:
+        img_array: List[np.ndarray] = []
+
+        for img_obj in ensure_tuple(img):
+            data = img_obj.get_image_data(**self.kwargs)
+            img_array.append(data)
+
+        return _stack_images(img_array, {}), {}
+
+    def verify_suffix(self, filename: Union[Sequence[PathLike], PathLike]) -> bool:
+        return True
 
 
 def creat_random_data(num_images: int = 10):
@@ -43,12 +74,12 @@ def creat_random_data(num_images: int = 10):
     img_list = []
     seg_list = []
     for img_idx in range(num_images):
-        img_ = nib.Nifti1Image(np.random.randint(0, 128, size=(256, 256, 256)), np.eye(4))
-        seg_ = nib.Nifti1Image(np.random.randint(0, 2, size=(256, 256, 256)), np.eye(4))
-        img_name = os.path.join(tempdir, "img_" + str(img_idx) + ".nii.gz")
-        seg_name = os.path.join(tempdir, "seg_" + str(img_idx) + ".nii.gz")
-        nib.save(img_, img_name)
-        nib.save(seg_, seg_name)
+        img_ = np.random.randint(0, 264, size=(64, 256, 128)).astype(np.uint16)
+        seg_ = np.random.randint(0, 2, size=(64, 256, 128)).astype(np.uint8)
+        img_name = os.path.join(tempdir, "img_" + str(img_idx) + ".tiff")
+        seg_name = os.path.join(tempdir, "seg_" + str(img_idx) + ".tiff")
+        OmeTiffWriter.save(img_, img_name, dim_order="ZYX")
+        OmeTiffWriter.save(seg_, seg_name, dim_order="ZYX")
         img_list.append(img_name)
         seg_list.append(seg_name)
 
@@ -75,16 +106,10 @@ class myDataModule(pytorch_lightning.LightningDataModule):
         # define the data transforms
         train_transforms = Compose(
             [
-                LoadImaged(keys=["image", "label"]),
+                LoadImaged(keys=["image", "label"], reader=bio_reader, dimension_order_out= "ZYX", C=0, T=0),
                 AddChanneld(keys=["image", "label"]),
-                Orientationd(keys=["image", "label"], axcodes="RAS"),
-                Spacingd(
-                    keys=["image", "label"],
-                    pixdim=(1.5, 1.5, 2.0),
-                    mode=("bilinear", "nearest"),
-                ),
                 ScaleIntensityRanged(
-                    keys=["image"], a_min=-57, a_max=164,
+                    keys=["image"], a_min=0, a_max=255,
                     b_min=0.0, b_max=1.0, clip=True,
                 ),
                 CropForegroundd(keys=["image", "label"], source_key="image"),
@@ -95,7 +120,7 @@ class myDataModule(pytorch_lightning.LightningDataModule):
                 RandCropByPosNegLabeld(
                     keys=["image", "label"],
                     label_key="label",
-                    spatial_size=(96, 96, 96),
+                    spatial_size=(32, 64, 64),
                     pos=1,
                     neg=1,
                     num_samples=4,
@@ -165,35 +190,20 @@ class Net(pytorch_lightning.LightningModule):
 
 
 if __name__ == '__main__':
-    # check multiprocessing context
-    print(torch.multiprocessing.get_start_method())
 
     # initialise the LightningModule
     net = Net()
     dm = myDataModule()
     dm.prepare_data()
 
-    """
-    # Create your PyTorch Lightning model here.
-    plugin = RayShardedPlugin(num_workers=3, num_cpus_per_worker=2, use_gpu=True)
-
-    # initialise Lightning's trainer.
+    # initialise Lightning's trainer (basic pytorch lightning).
     trainer = pytorch_lightning.Trainer(
-        # precision=16,
-        max_epochs=600,
+        gpus=2,
+        precision=16,
         enable_checkpointing=True,
         logger=False,
-        plugins=[plugin]
+        max_epochs=5
     )
-    """
-    # initialise Lightning's trainer.
-    trainer = pytorch_lightning.Trainer(
-        gpu=2,
-        precision=16,
-        max_epochs=600,
-        enable_checkpointing=True,
-        logger=False
-    )
-    
+
     # train
     trainer.fit(net, datamodule=dm)

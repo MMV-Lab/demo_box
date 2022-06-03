@@ -34,6 +34,7 @@ import tempfile
 import nibabel as nib
 import numpy as np
 import os
+from ray_lightning import RayShardedPlugin
 
 
 def creat_random_data(num_images: int = 10):
@@ -106,18 +107,18 @@ class myDataModule(pytorch_lightning.LightningDataModule):
         )
 
         # try two different ways of caching datasets
+        """
         self.train_ds = SmartCacheDataset(
             data=train_files, transform=train_transforms,
             replace_rate=0.2, num_replace_workers=4,
             cache_rate=0.5, num_init_workers=4
         )
-
         """
+
         self.train_ds = CacheDataset(
             data=train_files, transform=train_transforms,
             cache_rate=0.5, num_workers=4,
         )
-        """
 
     def train_dataloader(self):
         train_loader = torch.utils.data.DataLoader(
@@ -172,16 +173,28 @@ if __name__ == '__main__':
     dm = myDataModule()
     dm.prepare_data()
 
+    """
+    # Create your PyTorch Lightning model here.
+    plugin = RayShardedPlugin(num_workers=3, num_cpus_per_worker=2, use_gpu=True)
+
     # initialise Lightning's trainer.
     trainer = pytorch_lightning.Trainer(
-        gpus=2,
+        # precision=16,
+        max_epochs=600,
+        enable_checkpointing=True,
+        logger=False,
+        plugins=[plugin]
+    )
+    """
+    # initialise Lightning's trainer.
+    trainer = pytorch_lightning.Trainer(
+        gpu=2,
         precision=16,
         max_epochs=600,
         enable_checkpointing=True,
-        num_sanity_val_steps=1,
-        log_every_n_steps=16,
-        logger=False
+        logger=False,
+        plugins=[plugin]
     )
-
+    
     # train
     trainer.fit(net, datamodule=dm)

@@ -17,6 +17,7 @@ from monai.transforms import (
     CropForegroundd,
     LoadImaged,
     RandCropByPosNegLabeld,
+    RandSpatialCropSamplesd,
     ScaleIntensityRanged,
     EnsureTyped,
     EnsureType,
@@ -25,7 +26,7 @@ from monai.networks.nets import UNet
 from monai.networks.layers import Norm
 from monai.metrics import DiceMetric
 from monai.losses import DiceLoss
-from monai.data import CacheDataset, list_data_collate
+from monai.data import CacheDataset, PersistentDataset, list_data_collate
 
 from typing import Dict, List, Sequence, Tuple, Union
 import numpy as np
@@ -74,8 +75,18 @@ def creat_random_data(num_images: int = 10):
     img_list = []
     seg_list = []
     for img_idx in range(num_images):
-        img_ = np.random.randint(0, 264, size=(64, 256, 128)).astype(np.uint16)
         seg_ = np.random.randint(0, 2, size=(64, 256, 128)).astype(np.uint8)
+        # # version 1: random
+        # img_ = np.random.randint(20, 275, size=(64, 256, 128)).astype(np.uint16)
+
+        # # version 2: with pixel-to-pixel correspondence to easily debug dataloader
+        # img_ = seg_.copy().astype(np.uint16)
+        # img_[img_ > 0] = 100
+
+        # version 3: different size image
+        img_ = np.random.randint(20, 275, size=(32, 64, 64)).astype(np.uint16)
+        seg_[0, 0:32, 0:32] = 0
+
         img_name = os.path.join(tempdir, "img_" + str(img_idx) + ".tiff")
         seg_name = os.path.join(tempdir, "seg_" + str(img_idx) + ".tiff")
         OmeTiffWriter.save(img_, img_name, dim_order="ZYX")
@@ -117,15 +128,22 @@ class myDataModule(pytorch_lightning.LightningDataModule):
                 # big image based on pos / neg ratio
                 # the image centers of negative samples
                 # must be in valid image area
-                RandCropByPosNegLabeld(
+
+                # RandCropByPosNegLabeld(
+                #    keys=["image", "label"],
+                #    label_key="label",
+                #    spatial_size=(32, 64, 64),
+                #    pos=1,
+                #    neg=1,
+                #    num_samples=4,
+                #    image_key="image",
+                #    image_threshold=0,
+                #),
+                RandSpatialCropSamplesd(
                     keys=["image", "label"],
-                    label_key="label",
-                    spatial_size=(32, 64, 64),
-                    pos=1,
-                    neg=1,
+                    random_size=False,
                     num_samples=4,
-                    image_key="image",
-                    image_threshold=0,
+                    roi_size=(32, 64, 64),
                 ),
                 EnsureTyped(keys=["image", "label"]),
             ]
@@ -140,9 +158,15 @@ class myDataModule(pytorch_lightning.LightningDataModule):
         )
         """
 
+        """
         self.train_ds = CacheDataset(
             data=train_files, transform=train_transforms,
             cache_rate=0.5, num_workers=4,
+        )
+        """
+
+        self.train_ds = PersistentDataset(
+            data=train_files[:8], cache_dir="./tmp/", transform=train_transforms
         )
 
     def train_dataloader(self):
@@ -186,6 +210,9 @@ class Net(pytorch_lightning.LightningModule):
         images, labels = batch["image"], batch["label"]
         output = self.forward(images)
         loss = self.loss_function(output, labels)
+        sample_id = np.random.randint(1000, 9000)
+        OmeTiffWriter.save(images.detach().cpu().numpy().astype(np.float), f"image_{sample_id}.tiff", dim_order="TCZYX")
+        OmeTiffWriter.save(labels.detach().cpu().numpy().astype(np.float), f"label_{sample_id}.tiff", dim_order="TCZYX")
         return {"loss": loss}
 
 

@@ -16,7 +16,7 @@ from monai.transforms import (
     CropForegroundd,
     LoadImaged,
     RandCropByPosNegLabeld,
-    RandSpatialCropSamplesd,
+    RandSpatialCropd,
     ScaleIntensityRanged,
     EnsureTyped,
     EnsureType,
@@ -119,16 +119,14 @@ class myDataModule(pytorch_lightning.LightningDataModule):
                 ),
                 AddChanneld(keys=["imageA", "imageB"]),
                 # version 1
-                RandSpatialCropSamplesd(
+                RandSpatialCropd(
                     keys=["imageA"],
                     random_size=False,
-                    num_samples=4,
                     roi_size=(64, 64, 64),
                 ),
-                RandSpatialCropSamplesd(
+                RandSpatialCropd(
                     keys=["imageB"],
                     random_size=False,
-                    num_samples=4,
                     roi_size=(64, 64, 64),
                 ),
                 # # version 2:
